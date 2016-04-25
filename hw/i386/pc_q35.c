@@ -274,6 +274,7 @@ static void pc_q35_init(MachineState *machine)
 
 static void pc_q35_machine_options(MachineClass *m)
 {
+    PCMachineClass *pcmc = PC_MACHINE_CLASS(m);
     m->family = "pc_q35";
     m->desc = "Standard PC (Q35 + ICH9, 2009)";
     m->hot_add_cpu = pc_hot_add_cpu;
@@ -281,6 +282,7 @@ static void pc_q35_machine_options(MachineClass *m)
     m->default_machine_opts = "firmware=bios-256k.bin";
     m->default_display = "std";
     m->no_floppy = 1;
+    pcmc->type = PC_MACHINE_TYPE_Q35;
 }
 
 static void pc_q35_2_6_machine_options(MachineClass *m)

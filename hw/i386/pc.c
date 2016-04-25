@@ -963,8 +963,43 @@ static long get_file_size(FILE *f)
     return size;
 }
 
-static void load_linux(PCMachineState *pcms,
-                       FWCfgState *fw_cfg)
+static void load_linux_efi(PCMachineState *pcms)
+{
+    unsigned char class;
+    MachineState *machine = MACHINE(pcms);
+    FILE *file = fopen(machine->kernel_filename, "rb");
+
+    if (!file) {
+        goto err;
+    }
+
+    if (fseek(file, EI_CLASS, 0) || fread(&class, 1, 1, file) != 1) {
+        fclose(file);
+        goto err;
+    }
+    fclose(file);
+
+    if (load_elf(machine->kernel_filename, NULL, NULL, &boot_info.entry,
+                   NULL, NULL, 0, EM_X86_64, 0, 0) < 0) {
+        goto err;
+    }
+
+    if (class == ELFCLASS64) {
+        boot_info.long_mode = true;
+    } else if (class != ELFCLASS32) {
+        goto err;
+    }
+
+    boot_info.protected_mode = true;
+    return;
+
+err:
+    fprintf(stderr, "qemu: could not load kernel '%s'\n",
+                    machine->kernel_filename);
+    exit(1);
+}
+
+static void load_linux_bzimage(PCMachineState *pcms, FWCfgState *fw_cfg)
 {
     uint16_t protocol;
     int setup_size, kernel_size, initrd_size = 0, cmdline_size;
@@ -1410,7 +1445,7 @@ void xen_load_linux(PCMachineState *pcms)
     fw_cfg = fw_cfg_init_io(FW_CFG_IO_BASE);
     rom_set_fw(fw_cfg);
 
-    load_linux(pcms, fw_cfg);
+    load_linux_bzimage(pcms, fw_cfg);
     for (i = 0; i < nb_option_roms; i++) {
         assert(!strcmp(option_rom[i].name, "linuxboot.bin") ||
                !strcmp(option_rom[i].name, "multiboot.bin"));
@@ -1427,7 +1462,7 @@ void pc_memory_init(PCMachineState *pcms,
     int linux_boot, i;
     MemoryRegion *ram, *option_rom_mr;
     MemoryRegion *ram_below_4g, *ram_above_4g;
-    FWCfgState *fw_cfg;
+    FWCfgState *fw_cfg = NULL;
     MachineState *machine = MACHINE(pcms);
     PCMachineClass *pcmc = PC_MACHINE_GET_CLASS(pcms);
 
@@ -1509,36 +1544,42 @@ void pc_memory_init(PCMachineState *pcms,
                                     &pcms->hotplug_memory.mr);
     }
 
-    /* Initialize PC system firmware */
-    pc_system_firmware_init(rom_memory, !pcmc->pci_enabled);
+    if (pcmc->type != PC_MACHINE_TYPE_LITE) {
+        /* Initialize PC system firmware */
+        pc_system_firmware_init(rom_memory, !pcmc->pci_enabled);
 
-    option_rom_mr = g_malloc(sizeof(*option_rom_mr));
-    memory_region_init_ram(option_rom_mr, NULL, "pc.rom", PC_ROM_SIZE,
-                           &error_fatal);
-    vmstate_register_ram_global(option_rom_mr);
-    memory_region_add_subregion_overlap(rom_memory,
-                                        PC_ROM_MIN_VGA,
-                                        option_rom_mr,
-                                        1);
+        option_rom_mr = g_malloc(sizeof(*option_rom_mr));
+        memory_region_init_ram(option_rom_mr, NULL, "pc.rom", PC_ROM_SIZE,
+                               &error_fatal);
+        vmstate_register_ram_global(option_rom_mr);
+        memory_region_add_subregion_overlap(rom_memory,
+                                            PC_ROM_MIN_VGA,
+                                            option_rom_mr,
+                                            1);
 
-    fw_cfg = bochs_bios_init(&address_space_memory, pcms);
+        fw_cfg = bochs_bios_init(&address_space_memory, pcms);
 
-    rom_set_fw(fw_cfg);
+        rom_set_fw(fw_cfg);
 
-    if (pcmc->has_reserved_memory && pcms->hotplug_memory.base) {
-        uint64_t *val = g_malloc(sizeof(*val));
-        PCMachineClass *pcmc = PC_MACHINE_GET_CLASS(pcms);
-        uint64_t res_mem_end = pcms->hotplug_memory.base;
+        if (pcmc->has_reserved_memory && pcms->hotplug_memory.base) {
+            uint64_t *val = g_malloc(sizeof(*val));
+            PCMachineClass *pcmc = PC_MACHINE_GET_CLASS(pcms);
+            uint64_t res_mem_end = pcms->hotplug_memory.base;
 
-        if (!pcmc->broken_reserved_end) {
-            res_mem_end += memory_region_size(&pcms->hotplug_memory.mr);
+            if (!pcmc->broken_reserved_end) {
+                res_mem_end += memory_region_size(&pcms->hotplug_memory.mr);
+            }
+            *val = cpu_to_le64(ROUND_UP(res_mem_end, 0x1ULL << 30));
+            fw_cfg_add_file(fw_cfg, "etc/reserved-memory-end", val, sizeof(*val));
         }
-        *val = cpu_to_le64(ROUND_UP(res_mem_end, 0x1ULL << 30));
-        fw_cfg_add_file(fw_cfg, "etc/reserved-memory-end", val, sizeof(*val));
     }
 
     if (linux_boot) {
-        load_linux(pcms, fw_cfg);
+        if (pcmc->type == PC_MACHINE_TYPE_LITE) {
+            load_linux_efi(pcms);
+        } else {
+            load_linux_bzimage(pcms, fw_cfg);
+        }
     }
 
     for (i = 0; i < nb_option_roms; i++) {
