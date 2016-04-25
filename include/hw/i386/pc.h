@@ -34,6 +34,12 @@
 #define kvm_ioapic_in_kernel()   0
 #endif
 
+typedef enum {
+    PC_MACHINE_TYPE_PIIX    = 0,
+    PC_MACHINE_TYPE_Q35     = 1,
+    PC_MACHINE_TYPE_LITE    = 2,
+} PCMachineType;
+
 /**
  * PCMachineState:
  * @acpi_dev: link to ACPI PM device that performs ACPI hotplug handling
@@ -142,6 +148,8 @@ struct PCMachineClass {
     bool save_tsc_khz;
     /* generate legacy CPU hotplug AML */
     bool legacy_cpu_hotplug;
+    
+    PCMachineType type;
 };
 
 #define TYPE_PC_MACHINE "generic-pc-machine"

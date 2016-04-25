@@ -282,6 +282,7 @@ static void pc_q35_init(MachineState *machine)
 
 static void pc_q35_machine_options(MachineClass *m)
 {
+    PCMachineClass *pcmc = PC_MACHINE_CLASS(m);
     m->family = "pc_q35";
     m->desc = "Standard PC (Q35 + ICH9, 2009)";
     m->hot_add_cpu = pc_hot_add_cpu;
@@ -290,6 +291,7 @@ static void pc_q35_machine_options(MachineClass *m)
     m->default_display = "std";
     m->no_floppy = 1;
     m->has_dynamic_sysbus = true;
+    pcmc->type = PC_MACHINE_TYPE_Q35;
 }
 
 static void pc_q35_2_7_machine_options(MachineClass *m)
