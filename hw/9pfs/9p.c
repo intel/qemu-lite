@@ -1103,7 +1103,11 @@ static void v9fs_getattr(void *opaque)
      * Currently we only support BASIC fields in stat, so there is no
      * need to look at request_mask.
      */
-    retval = v9fs_co_lstat(pdu, &fidp->path, &stbuf);
+    if (fidp->fs.fd > 0) {
+        retval = v9fs_co_fstat(pdu, fidp, &stbuf);
+    } else {
+        retval = v9fs_co_lstat(pdu, &fidp->path, &stbuf);
+    }
     if (retval < 0) {
         goto out;
     }
