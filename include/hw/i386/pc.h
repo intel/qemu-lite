@@ -285,6 +285,11 @@ DeviceState *pm_lite_init(PCIBus *bus, int devfn, qemu_irq sci_irq);
 /* hpet.c */
 extern int no_hpet;
 
+/* pci_lite.c */
+PCIBus *pci_lite_init(MemoryRegion *address_space_mem,
+                      MemoryRegion *address_space_io,
+                      MemoryRegion *pci_memory);
+
 /* piix_pci.c */
 struct PCII440FXState;
 typedef struct PCII440FXState PCII440FXState;
