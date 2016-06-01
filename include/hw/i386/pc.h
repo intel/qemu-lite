@@ -278,6 +278,10 @@ I2CBus *piix4_pm_init(PCIBus *bus, int devfn, uint32_t smb_io_base,
                       int smm_enabled, DeviceState **piix4_pm);
 void piix4_smbus_register_device(SMBusDevice *dev, uint8_t addr);
 
+/* pm_lite.c */
+
+DeviceState *pm_lite_init(PCIBus *bus, int devfn, qemu_irq sci_irq);
+
 /* hpet.c */
 extern int no_hpet;
 
