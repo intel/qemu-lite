@@ -48,6 +48,7 @@
 /* Supported chipsets: */
 #include "hw/acpi/piix4.h"
 #include "hw/acpi/pcihp.h"
+#include "hw/acpi/pm_lite.h"
 #include "hw/i386/ich9.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/pci-host/q35.h"
@@ -77,6 +78,8 @@
 #define ACPI_BUILD_DPRINTF(fmt, ...)
 #endif
 
+#define ACPI_PORT_SMI_CMD           0x00b2 /* TODO: this is APM_CNT_IOPORT */
+
 typedef struct AcpiMcfgInfo {
     uint64_t mcfg_base;
     uint32_t mcfg_size;
@@ -88,6 +91,7 @@ typedef struct AcpiPmInfo {
     bool pcihp_bridge_en;
     uint8_t s4_val;
     uint16_t sci_int;
+    uint32_t smi_cmd;
     uint8_t acpi_enable_cmd;
     uint8_t acpi_disable_cmd;
     uint32_t gpe0_blk;
@@ -101,8 +105,14 @@ typedef struct AcpiPmInfo {
     uint16_t pcihp_io_len;
 } AcpiPmInfo;
 
+typedef enum {
+    PMTYPE_PIIX4   = 0,
+    PMTYPE_LPC     = 1,
+    PMTYPE_LITE    = 2,
+} PMType;
+
 typedef struct AcpiMiscInfo {
-    bool is_piix4;
+    PMType pm_type;
     bool has_hpet;
     TPMVersion tpm_version;
     const unsigned char *dsdt_code;
@@ -120,27 +130,32 @@ typedef struct AcpiBuildPciBusHotplugState {
 
 static void acpi_get_pm_info(AcpiPmInfo *pm)
 {
-    Object *piix = piix4_pm_find();
-    Object *lpc = ich9_lpc_find();
-    Object *obj = NULL;
+    Object *obj = ich9_lpc_find();
     QObject *o;
 
     pm->cpu_hp_io_base = 0;
     pm->pcihp_io_base = 0;
     pm->pcihp_io_len = 0;
-    if (piix) {
-        obj = piix;
-        pm->cpu_hp_io_base = PIIX4_CPU_HOTPLUG_IO_BASE;
+    pm->smi_cmd = ACPI_PORT_SMI_CMD;
+
+    if (obj) {
+        pm->cpu_hp_io_base = ICH9_CPU_HOTPLUG_IO_BASE;
+    } else {
+        obj = piix4_pm_find();
+        if (obj) {
+            pm->cpu_hp_io_base = PIIX4_CPU_HOTPLUG_IO_BASE;
+        } else {
+            obj = pm_lite_find();
+            assert(obj);
+            pm->smi_cmd = 0;
+            pm->cpu_hp_io_base = PM_LITE_CPU_HOTPLUG_IO_BASE;
+        }
+
         pm->pcihp_io_base =
             object_property_get_int(obj, ACPI_PCIHP_IO_BASE_PROP, NULL);
         pm->pcihp_io_len =
             object_property_get_int(obj, ACPI_PCIHP_IO_LEN_PROP, NULL);
     }
-    if (lpc) {
-        obj = lpc;
-        pm->cpu_hp_io_base = ICH9_CPU_HOTPLUG_IO_BASE;
-    }
-    assert(obj);
 
     pm->cpu_hp_io_len = ACPI_GPE_PROC_LEN;
     pm->mem_hp_io_base = ACPI_MEMORY_HOTPLUG_BASE;
@@ -191,15 +206,12 @@ static void acpi_get_pm_info(AcpiPmInfo *pm)
 
 static void acpi_get_misc_info(AcpiMiscInfo *info)
 {
-    Object *piix = piix4_pm_find();
-    Object *lpc = ich9_lpc_find();
-    assert(!!piix != !!lpc);
-
-    if (piix) {
-        info->is_piix4 = true;
-    }
-    if (lpc) {
-        info->is_piix4 = false;
+    if (piix4_pm_find()) {
+        info->pm_type = PMTYPE_PIIX4;
+    } else if (ich9_lpc_find()) {
+        info->pm_type = PMTYPE_LPC;
+    } else if (pm_lite_find()) {
+         info->pm_type = PMTYPE_LITE;
     }
 
     info->has_hpet = hpet_find();
@@ -222,6 +234,12 @@ static Object *acpi_get_i386_pci_host(void)
     if (!host) {
         host = OBJECT_CHECK(PCIHostState,
                             object_resolve_path("/machine/q35", NULL),
+                            TYPE_PCI_HOST_BRIDGE);
+    }
+
+    if (!host) {
+        host = OBJECT_CHECK(PCIHostState,
+                            object_resolve_path("/machine/pcilite", NULL),
                             TYPE_PCI_HOST_BRIDGE);
     }
 
@@ -250,8 +268,6 @@ static void acpi_get_pci_info(PcPciInfo *info)
                                             NULL);
 }
 
-#define ACPI_PORT_SMI_CMD           0x00b2 /* TODO: this is APM_CNT_IOPORT */
-
 static void acpi_align_size(GArray *blob, unsigned align)
 {
     /* Align size to multiple of given size. This reduces the chance
@@ -275,7 +291,7 @@ static void fadt_setup(AcpiFadtDescriptorRev1 *fadt, AcpiPmInfo *pm)
     fadt->model = 1;
     fadt->reserved1 = 0;
     fadt->sci_int = cpu_to_le16(pm->sci_int);
-    fadt->smi_cmd = cpu_to_le32(ACPI_PORT_SMI_CMD);
+    fadt->smi_cmd = cpu_to_le32(pm->smi_cmd);
     fadt->acpi_enable = pm->acpi_enable_cmd;
     fadt->acpi_disable = pm->acpi_disable_cmd;
     /* EVT, CNT, TMR offset matches hw/acpi/core.c */
@@ -1888,7 +1904,7 @@ static void build_piix4_isa_bridge(Aml *table)
     aml_append(table, scope);
 }
 
-static void build_piix4_pci_hotplug(Aml *table)
+static void build_pci_hotplug(Aml *table)
 {
     Aml *scope;
     Aml *field;
@@ -1929,7 +1945,7 @@ static void build_piix4_pci_hotplug(Aml *table)
     aml_append(table, scope);
 }
 
-static Aml *build_q35_osc_method(void)
+static Aml *build_osc_method(void)
 {
     Aml *if_ctx;
     Aml *if_ctx2;
@@ -1978,6 +1994,21 @@ static Aml *build_q35_osc_method(void)
     return method;
 }
 
+static void build_lite_pci0_int(Aml *table)
+{
+    Aml *sb_scope = aml_scope("_SB");
+    Aml *pci0_scope = aml_scope("PCI0");
+
+    aml_append(pci0_scope, build_prt(false));
+    aml_append(sb_scope, pci0_scope);
+
+    aml_append(sb_scope, build_gsi_link_dev("LNKA", 0x10, 0x10));
+    aml_append(sb_scope, build_gsi_link_dev("LNKB", 0x11, 0x11));
+    aml_append(sb_scope, build_gsi_link_dev("LNKC", 0x12, 0x12));
+    aml_append(sb_scope, build_gsi_link_dev("LNKD", 0x13, 0x13));
+    aml_append(table, sb_scope);
+}
+
 static void
 build_dsdt(GArray *table_data, GArray *linker,
            AcpiPmInfo *pm, AcpiMiscInfo *misc,
@@ -1999,7 +2030,7 @@ build_dsdt(GArray *table_data, GArray *linker,
     acpi_data_push(dsdt->buf, sizeof(AcpiTableHeader));
 
     build_dbg_aml(dsdt);
-    if (misc->is_piix4) {
+    if (misc->pm_type == PMTYPE_PIIX4) {
         sb_scope = aml_scope("_SB");
         dev = aml_device("PCI0");
         aml_append(dev, aml_name_decl("_HID", aml_eisaid("PNP0A03")));
@@ -2012,9 +2043,9 @@ build_dsdt(GArray *table_data, GArray *linker,
         build_piix4_pm(dsdt);
         build_piix4_isa_bridge(dsdt);
         build_isa_devices_aml(dsdt);
-        build_piix4_pci_hotplug(dsdt);
+        build_pci_hotplug(dsdt);
         build_piix4_pci0_int(dsdt);
-    } else {
+    } else if (misc->pm_type == PMTYPE_LPC) {
         sb_scope = aml_scope("_SB");
         aml_append(sb_scope,
             aml_operation_region("PCST", AML_SYSTEM_IO, aml_int(0xae00), 0x0c));
@@ -2033,7 +2064,7 @@ build_dsdt(GArray *table_data, GArray *linker,
         aml_append(dev, aml_name_decl("_UID", aml_int(1)));
         aml_append(dev, aml_name_decl("SUPP", aml_int(0)));
         aml_append(dev, aml_name_decl("CTRL", aml_int(0)));
-        aml_append(dev, build_q35_osc_method());
+        aml_append(dev, build_osc_method());
         aml_append(sb_scope, dev);
         aml_append(dsdt, sb_scope);
 
@@ -2041,6 +2072,21 @@ build_dsdt(GArray *table_data, GArray *linker,
         build_q35_isa_bridge(dsdt);
         build_isa_devices_aml(dsdt);
         build_q35_pci0_int(dsdt);
+    } else { /* misc->pm_type == PMTYPE_LITE */
+        sb_scope = aml_scope("_SB");
+        dev = aml_device("PCI0");
+        aml_append(dev, aml_name_decl("_HID", aml_eisaid("PNP0A08")));
+        aml_append(dev, aml_name_decl("_CID", aml_eisaid("PNP0A03")));
+        aml_append(dev, aml_name_decl("_ADR", aml_int(0)));
+        aml_append(dev, aml_name_decl("_UID", aml_int(1)));
+        aml_append(dev, aml_name_decl("SUPP", aml_int(0)));
+        aml_append(dev, aml_name_decl("CTRL", aml_int(0)));
+        aml_append(dev, build_osc_method());
+        aml_append(sb_scope, dev);
+        aml_append(dsdt, sb_scope);
+
+        build_pci_hotplug(dsdt);
+        build_lite_pci0_int(dsdt);
     }
 
     build_cpu_hotplug_aml(dsdt);
@@ -2053,7 +2099,7 @@ build_dsdt(GArray *table_data, GArray *linker,
 
         aml_append(scope, aml_method("_L00", 0, AML_NOTSERIALIZED));
 
-        if (misc->is_piix4) {
+        if (misc->pm_type == PMTYPE_PIIX4 || misc->pm_type == PMTYPE_LITE) {
             method = aml_method("_E01", 0, AML_NOTSERIALIZED);
             aml_append(method,
                 aml_acquire(aml_name("\\_SB.PCI0.BLCK"), 0xFFFF));
