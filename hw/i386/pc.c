@@ -1701,8 +1701,10 @@ static void pc_cpu_plug(HotplugHandler *hotplug_dev,
         goto out;
     }
 
-    /* increment the number of CPUs */
-    rtc_set_memory(pcms->rtc, 0x5f, rtc_get_memory(pcms->rtc, 0x5f) + 1);
+    if (pcms->rtc) {
+        /* increment the number of CPUs */
+        rtc_set_memory(pcms->rtc, 0x5f, rtc_get_memory(pcms->rtc, 0x5f) + 1);
+    }
 
     apic_id.arch_id = cc->get_arch_id(CPU(dev));
     found_cpu = bsearch(&apic_id, pcms->possible_cpus->cpus,
