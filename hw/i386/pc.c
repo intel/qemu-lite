@@ -1247,8 +1247,10 @@ void pc_machine_done(Notifier *notifier, void *data)
                                         PCMachineState, machine_done);
     PCIBus *bus = pcms->bus;
 
-    /* set the number of CPUs */
-    rtc_set_memory(pcms->rtc, 0x5f, pc_present_cpus_count(pcms) - 1);
+    if (pcms->rtc) {
+        /* set the number of CPUs */
+        rtc_set_memory(pcms->rtc, 0x5f, pc_present_cpus_count(pcms) - 1);
+    }
 
     if (bus) {
         int extra_hosts = 0;
@@ -1793,7 +1795,7 @@ static void pc_cpu_plug(HotplugHandler *hotplug_dev,
         }
     }
 
-    if (dev->hotplugged) {
+    if (dev->hotplugged && pcms->rtc) {
         /* increment the number of CPUs */
         rtc_set_memory(pcms->rtc, 0x5f, rtc_get_memory(pcms->rtc, 0x5f) + 1);
     }
