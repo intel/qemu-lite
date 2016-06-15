@@ -60,6 +60,8 @@
 #include "qapi/qmp/qint.h"
 #include "qom/qom-qobject.h"
 
+#include "hw/i386/pc_lite_acpi.h"
+
 /* These are used to size the ACPI tables for -M pc-i440fx-1.7 and
  * -M pc-i440fx-2.0.  Even if the actual amount of AML generated grows
  * a little bit, there should be plenty of free space since the DSDT
@@ -2283,8 +2285,8 @@ build_dsdt(GArray *table_data, GArray *linker,
     aml_append(scope, aml_name_decl("_S5", pkg));
     aml_append(dsdt, scope);
 
-    /* create fw_cfg node, unconditionally */
-    {
+    /* create fw_cfg node for non pc-lite platforms */
+    if (misc->pm_type != PMTYPE_LITE) {
         /* when using port i/o, the 8-bit data register *always* overlaps
          * with half of the 16-bit control register. Hence, the total size
          * of the i/o region used is FW_CFG_CTL_SIZE; when using DMA, the
@@ -2931,8 +2933,10 @@ void acpi_setup(void)
     PCMachineClass *pcmc = PC_MACHINE_GET_CLASS(pcms);
     AcpiBuildTables tables;
     AcpiBuildState *build_state;
+    FWCfgState *fw_cfg = pcms->fw_cfg;
+    bool is_pc_lite = !!pm_lite_find();
 
-    if (!pcms->fw_cfg) {
+    if (!fw_cfg && !is_pc_lite) {
         ACPI_BUILD_DPRINTF("No fw cfg. Bailing out.\n");
         return;
     }
@@ -2954,35 +2958,43 @@ void acpi_setup(void)
     acpi_build_tables_init(&tables);
     acpi_build(&tables, MACHINE(pcms));
 
-    /* Now expose it all to Guest */
-    build_state->table_mr = acpi_add_rom_blob(build_state, tables.table_data,
-                                               ACPI_BUILD_TABLE_FILE,
-                                               ACPI_BUILD_TABLE_MAX_SIZE);
-    assert(build_state->table_mr != NULL);
+    if (!is_pc_lite) {
+        /* Now expose it all to Guest */
+        build_state->table_mr = acpi_add_rom_blob(build_state, tables.table_data,
+                                                  ACPI_BUILD_TABLE_FILE,
+                                                  ACPI_BUILD_TABLE_MAX_SIZE);
+        assert(build_state->table_mr != NULL);
 
-    build_state->linker_mr =
-        acpi_add_rom_blob(build_state, tables.linker, "etc/table-loader", 0);
+        build_state->linker_mr =
+            acpi_add_rom_blob(build_state, tables.linker, "etc/table-loader", 0);
 
-    fw_cfg_add_file(pcms->fw_cfg, ACPI_BUILD_TPMLOG_FILE,
-                    tables.tcpalog->data, acpi_data_len(tables.tcpalog));
-
-    if (!pcmc->rsdp_in_ram) {
-        /*
-         * Keep for compatibility with old machine types.
-         * Though RSDP is small, its contents isn't immutable, so
-         * we'll update it along with the rest of tables on guest access.
-         */
-        uint32_t rsdp_size = acpi_data_len(tables.rsdp);
-
-        build_state->rsdp = g_memdup(tables.rsdp->data, rsdp_size);
-        fw_cfg_add_file_callback(pcms->fw_cfg, ACPI_BUILD_RSDP_FILE,
-                                 acpi_build_update, build_state,
-                                 build_state->rsdp, rsdp_size);
-        build_state->rsdp_mr = NULL;
+        fw_cfg_add_file(fw_cfg, ACPI_BUILD_TPMLOG_FILE,
+                        tables.tcpalog->data, acpi_data_len(tables.tcpalog));
     } else {
-        build_state->rsdp = NULL;
-        build_state->rsdp_mr = acpi_add_rom_blob(build_state, tables.rsdp,
-                                                  ACPI_BUILD_RSDP_FILE, 0);
+        pc_lite_acpi_add_table(tables.table_data, tables.linker);
+    }
+
+    if (!is_pc_lite) {
+        if (!pcmc->rsdp_in_ram) {
+            /*
+             * Keep for compatibility with old machine types.
+             * Though RSDP is small, its contents isn't immutable, so
+             * we'll update it along with the rest of tables on guest access.
+             */
+            uint32_t rsdp_size = acpi_data_len(tables.rsdp);
+
+            build_state->rsdp = g_memdup(tables.rsdp->data, rsdp_size);
+            fw_cfg_add_file_callback(fw_cfg, ACPI_BUILD_RSDP_FILE,
+                                     acpi_build_update, build_state,
+                                     build_state->rsdp, rsdp_size);
+            build_state->rsdp_mr = NULL;
+        } else {
+            build_state->rsdp = NULL;
+            build_state->rsdp_mr = acpi_add_rom_blob(build_state, tables.rsdp,
+                                                     ACPI_BUILD_RSDP_FILE, 0);
+        }
+    } else {
+        pc_lite_acpi_add_rsdp(tables.rsdp);
     }
 
     qemu_register_reset(acpi_build_reset, build_state);
@@ -2993,4 +3005,9 @@ void acpi_setup(void)
      * in build_state.
      */
     acpi_build_tables_cleanup(&tables, false);
+
+    /* no BIOS is used for pc-lite, so ACPI is patched by QEMU */
+    if (is_pc_lite && !pc_lite_acpi_build(pcms)) {
+        build_state->patched = 1;
+    }
 }
