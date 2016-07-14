@@ -23,14 +23,25 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "hw/mem/nvdimm.h"
+
+static MemoryRegion *nvdimm_get_memory_region(PCDIMMDevice *dimm)
+{
+    MemoryRegion *mr = host_memory_backend_get_memory(dimm->hostmem, &error_abort);
+
+    mr->nvdimm_device = true;
+    return mr;
+}
 
 static void nvdimm_class_init(ObjectClass *oc, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
+    PCDIMMDeviceClass *ddc = PC_DIMM_CLASS(oc);
 
     /* nvdimm hotplug has not been supported yet. */
     dc->hotpluggable = false;
+    ddc->get_memory_region = nvdimm_get_memory_region;
 }
 
 static TypeInfo nvdimm_info = {
