@@ -290,7 +290,8 @@ static bool vfio_listener_skipped_section(MemoryRegionSection *section)
             * are never accessed by the CPU and beyond the address width of
             * some IOMMU hardware.  TODO: VFIO should tell us the IOMMU width.
             */
-           section->offset_within_address_space & (1ULL << 63);
+           section->offset_within_address_space & (1ULL << 63) ||
+           section->mr->nvdimm_device;
 }
 
 static void vfio_iommu_map_notify(Notifier *n, void *data)

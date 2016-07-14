@@ -74,8 +74,11 @@ static void nvdimm_init(Object *obj)
 static MemoryRegion *nvdimm_get_memory_region(PCDIMMDevice *dimm)
 {
     NVDIMMDevice *nvdimm = NVDIMM(dimm);
+    MemoryRegion *mr = &nvdimm->nvdimm_mr;
 
-    return &nvdimm->nvdimm_mr;
+    mr->nvdimm_device = true;
+
+    return mr;
 }
 
 static void nvdimm_realize(PCDIMMDevice *dimm, Error **errp)

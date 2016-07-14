@@ -173,6 +173,7 @@ struct MemoryRegion {
     bool subpage;
     bool readonly; /* For RAM regions */
     bool rom_device;
+    bool nvdimm_device;
     bool flush_coalesced_mmio;
     bool global_locking;
     uint8_t dirty_log_mask;
