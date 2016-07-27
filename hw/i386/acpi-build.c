@@ -1964,18 +1964,36 @@ static Aml *build_osc_method(void)
     return method;
 }
 
+static Aml *build_pc_lite_routing_table(void)
+{
+    int i, j;
+    Aml *method, *res, *pkg;
+
+    method = aml_method("_PRT", 0, AML_NOTSERIALIZED);
+    res = aml_package(128);
+    for (i = 0; i < 32; i++) {
+        for (j = 0; j < 4; j++) {
+            pkg = aml_package(4);
+            aml_append(pkg, aml_int((i << 16) | 0xffff));
+            aml_append(pkg, aml_int(j));
+            aml_append(pkg, aml_int(0));
+            aml_append(pkg, aml_int(0x10 + j));
+            aml_append(res, pkg);
+        }
+    }
+
+    aml_append(method, aml_return(res));
+    return method;
+}
+
 static void build_lite_pci0_int(Aml *table)
 {
     Aml *sb_scope = aml_scope("_SB");
     Aml *pci0_scope = aml_scope("PCI0");
 
-    aml_append(pci0_scope, build_prt(false));
+    aml_append(pci0_scope, build_pc_lite_routing_table());
     aml_append(sb_scope, pci0_scope);
 
-    aml_append(sb_scope, build_gsi_link_dev("LNKA", 0x10, 0x10));
-    aml_append(sb_scope, build_gsi_link_dev("LNKB", 0x11, 0x11));
-    aml_append(sb_scope, build_gsi_link_dev("LNKC", 0x12, 0x12));
-    aml_append(sb_scope, build_gsi_link_dev("LNKD", 0x13, 0x13));
     aml_append(table, sb_scope);
 }
 
