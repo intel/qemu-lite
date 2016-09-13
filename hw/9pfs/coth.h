@@ -46,6 +46,8 @@
         qemu_coroutine_yield();                                         \
     } while (0)
 
+#undef v9fs_co_run_in_worker
+#define v9fs_co_run_in_worker(code_block) do {code_block} while(0);
 extern void co_run_in_worker_bh(void *);
 extern int v9fs_init_worker_threads(void);
 extern int v9fs_co_readlink(V9fsPDU *, V9fsPath *, V9fsString *);
