@@ -263,7 +263,8 @@ static int glue(load_elf, SZ)(const char *name, int fd,
                               void *translate_opaque,
                               int must_swab, uint64_t *pentry,
                               uint64_t *lowaddr, uint64_t *highaddr,
-                              int elf_machine, int clear_lsb, int data_swab)
+                              int elf_machine, int clear_lsb,
+                              int data_swab, int shared)
 {
     struct elfhdr ehdr;
     struct elf_phdr *phdr = NULL, *ph;
@@ -347,41 +348,48 @@ static int glue(load_elf, SZ)(const char *name, int fd,
         if (ph->p_type == PT_LOAD) {
             mem_size = ph->p_memsz; /* Size of the ROM */
             file_size = ph->p_filesz; /* Size of the allocated data */
-            data = g_malloc0(file_size);
-            if (ph->p_filesz > 0) {
-                if (lseek(fd, ph->p_offset, SEEK_SET) < 0) {
-                    goto fail;
-                }
-                if (read(fd, data, file_size) != file_size) {
-                    goto fail;
-                }
-            }
-            /* address_offset is hack for kernel images that are
-               linked at the wrong physical address.  */
-            if (translate_fn) {
-                addr = translate_fn(translate_opaque, ph->p_paddr);
-                glue(elf_reloc, SZ)(&ehdr, fd, must_swab,  translate_fn,
-                                    translate_opaque, data, ph, elf_machine);
-            } else {
+            snprintf(label, sizeof(label), "phdr #%d: %s", i, name);
+            if (!translate_fn && !data_swab && shared) {
+                rom_add_file_entry(label, name,
+                                   ph->p_paddr, ph->p_offset, ph->p_filesz);
                 addr = ph->p_paddr;
-            }
+            } else {
+                data = g_malloc0(file_size);
+                if (ph->p_filesz > 0) {
+                    if (lseek(fd, ph->p_offset, SEEK_SET) < 0) {
+                        goto fail;
+                    }
+                    if (read(fd, data, file_size) != file_size) {
+                        goto fail;
+                    }
+                }
+                /* address_offset is hack for kernel images that are
+                   linked at the wrong physical address.  */
+                if (translate_fn) {
+                    addr = translate_fn(translate_opaque, ph->p_paddr);
+                    glue(elf_reloc, SZ)(&ehdr, fd, must_swab,  translate_fn,
+                                        translate_opaque, data, ph, elf_machine);
+                } else {
+                    addr = ph->p_paddr;
+                }
 
-            if (data_swab) {
-                int j;
-                for (j = 0; j < file_size; j += (1 << data_swab)) {
-                    uint8_t *dp = data + j;
-                    switch (data_swab) {
-                    case (1):
-                        *(uint16_t *)dp = bswap16(*(uint16_t *)dp);
-                        break;
-                    case (2):
-                        *(uint32_t *)dp = bswap32(*(uint32_t *)dp);
-                        break;
-                    case (3):
-                        *(uint64_t *)dp = bswap64(*(uint64_t *)dp);
-                        break;
-                    default:
-                        g_assert_not_reached();
+                if (data_swab) {
+                    int j;
+                    for (j = 0; j < file_size; j += (1 << data_swab)) {
+                        uint8_t *dp = data + j;
+                        switch (data_swab) {
+                        case (1):
+                            *(uint16_t *)dp = bswap16(*(uint16_t *)dp);
+                            break;
+                        case (2):
+                            *(uint32_t *)dp = bswap32(*(uint32_t *)dp);
+                            break;
+                        case (3):
+                            *(uint64_t *)dp = bswap64(*(uint64_t *)dp);
+                            break;
+                        default:
+                            g_assert_not_reached();
+                        }
                     }
                 }
             }
@@ -397,10 +405,10 @@ static int glue(load_elf, SZ)(const char *name, int fd,
                 *pentry = ehdr.e_entry - ph->p_vaddr + ph->p_paddr;
             }
 
-            snprintf(label, sizeof(label), "phdr #%d: %s", i, name);
-
-            /* rom_add_elf_program() seize the ownership of 'data' */
-            rom_add_elf_program(label, data, file_size, mem_size, addr);
+            if (!shared) {
+                /* rom_add_elf_program() seize the ownership of 'data' */
+                rom_add_elf_program(label, data, file_size, mem_size, addr);
+            }
 
             total_size += mem_size;
             if (addr < low)
