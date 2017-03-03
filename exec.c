@@ -166,6 +166,7 @@ static void memory_map_init(void);
 static void tcg_commit(MemoryListener *listener);
 
 static MemoryRegion io_mem_watch;
+static unsigned ld_ref;
 
 /**
  * CPUAddressSpace: all the information a CPU needs about an AddressSpace
@@ -426,10 +427,12 @@ MemoryRegion *address_space_translate(AddressSpace *as, hwaddr addr,
     MemoryRegion *mr;
 
     for (;;) {
+        if (kvm_enabled()) atomic_inc(&ld_ref);
         AddressSpaceDispatch *d = atomic_rcu_read(&as->dispatch);
         section = address_space_translate_internal(d, addr, &addr, plen, true);
         mr = section->mr;
 
+        if (kvm_enabled()) atomic_dec(&ld_ref);
         if (!mr->iommu_ops) {
             break;
         }
@@ -2315,6 +2318,11 @@ static void mem_begin(MemoryListener *listener)
 
 static void address_space_dispatch_free(AddressSpaceDispatch *d)
 {
+    if (kvm_enabled()) {
+        while(atomic_read(&ld_ref)){
+            g_usleep(1);
+        }
+    }
     phys_sections_free(&d->map);
     g_free(d);
 }
@@ -2329,7 +2337,11 @@ static void mem_commit(MemoryListener *listener)
 
     atomic_rcu_set(&as->dispatch, next);
     if (cur) {
-        call_rcu(cur, address_space_dispatch_free, rcu);
+        if (kvm_enabled()) {
+            address_space_dispatch_free(cur);
+        } else {
+            call_rcu(cur, address_space_dispatch_free, rcu);
+        }
     }
 }
 
@@ -2375,7 +2387,11 @@ void address_space_destroy_dispatch(AddressSpace *as)
 
     atomic_rcu_set(&as->dispatch, NULL);
     if (d) {
-        call_rcu(d, address_space_dispatch_free, rcu);
+        if (kvm_enabled()) {
+            address_space_dispatch_free(d);
+        } else {
+            call_rcu(d, address_space_dispatch_free, rcu);
+        }
     }
 }
 

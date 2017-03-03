@@ -1434,12 +1434,10 @@ static void memory_region_finalize(Object *obj)
      * and cause an infinite loop.
      */
     mr->enabled = false;
-    memory_region_transaction_begin();
     while (!QTAILQ_EMPTY(&mr->subregions)) {
         MemoryRegion *subregion = QTAILQ_FIRST(&mr->subregions);
         memory_region_del_subregion(mr, subregion);
     }
-    memory_region_transaction_commit();
 
     mr->destructor(mr);
     memory_region_clear_coalescing(mr);
