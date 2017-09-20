@@ -70,6 +70,11 @@ const char *load_elf_strerror(int error);
  * their particular values for @elf_machine are set.
  */
 
+int load_elf_shared(const char *filename, uint64_t (*translate_fn)(void *, uint64_t),
+                    void *translate_opaque, uint64_t *pentry, uint64_t *lowaddr,
+                    uint64_t *highaddr, int big_endian, int elf_machine,
+                    int clear_lsb, int data_swab, int shared);
+
 int load_elf(const char *filename, uint64_t (*translate_fn)(void *, uint64_t),
              void *translate_opaque, uint64_t *pentry, uint64_t *lowaddr,
              uint64_t *highaddr, int big_endian, int elf_machine,
@@ -149,5 +154,7 @@ void hmp_info_roms(Monitor *mon, const QDict *qdict);
 
 int rom_add_vga(const char *file);
 int rom_add_option(const char *file, int32_t bootindex);
+int rom_add_file_entry(const char *name, const char *path,
+                       uint64_t paddr, size_t offset, size_t size);
 
 #endif

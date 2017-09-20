@@ -412,10 +412,10 @@ fail:
 }
 
 /* return < 0 if error, otherwise the number of bytes loaded in memory */
-int load_elf(const char *filename, uint64_t (*translate_fn)(void *, uint64_t),
-             void *translate_opaque, uint64_t *pentry, uint64_t *lowaddr,
-             uint64_t *highaddr, int big_endian, int elf_machine,
-             int clear_lsb, int data_swab)
+int load_elf_shared(const char *filename, uint64_t (*translate_fn)(void *, uint64_t),
+                    void *translate_opaque, uint64_t *pentry, uint64_t *lowaddr,
+                    uint64_t *highaddr, int big_endian, int elf_machine,
+                    int clear_lsb, int data_swab, int shared)
 {
     int fd, data_order, target_data_order, must_swab, ret = ELF_LOAD_FAILED;
     uint8_t e_ident[EI_NIDENT];
@@ -455,16 +455,26 @@ int load_elf(const char *filename, uint64_t (*translate_fn)(void *, uint64_t),
     if (e_ident[EI_CLASS] == ELFCLASS64) {
         ret = load_elf64(filename, fd, translate_fn, translate_opaque, must_swab,
                          pentry, lowaddr, highaddr, elf_machine, clear_lsb,
-                         data_swab);
+                         data_swab, shared);
     } else {
         ret = load_elf32(filename, fd, translate_fn, translate_opaque, must_swab,
                          pentry, lowaddr, highaddr, elf_machine, clear_lsb,
-                         data_swab);
+                         data_swab, shared);
     }
 
  fail:
     close(fd);
     return ret;
+}
+
+int load_elf(const char *filename, uint64_t (*translate_fn)(void *, uint64_t),
+             void *translate_opaque, uint64_t *pentry, uint64_t *lowaddr,
+             uint64_t *highaddr, int big_endian, int elf_machine,
+             int clear_lsb, int data_swab)
+{
+    return load_elf_shared(filename, translate_fn, translate_opaque,
+                           pentry, lowaddr, highaddr, big_endian, elf_machine,
+                           clear_lsb, data_swab, 0);
 }
 
 static void bswap_uboot_header(uboot_image_header_t *hdr)
@@ -774,6 +784,7 @@ struct Rom {
      */
     size_t romsize;
     size_t datasize;
+    size_t offset;
 
     uint8_t *data;
     MemoryRegion *mr;
@@ -782,6 +793,9 @@ struct Rom {
     char *fw_file;
 
     hwaddr addr;
+
+    void (*load_fn)(Rom *rom, Error **errp);
+
     QTAILQ_ENTRY(Rom) next;
 };
 
@@ -914,10 +928,16 @@ int rom_add_file(const char *file, const char *fw_dir,
 err:
     if (fd != -1)
         close(fd);
+
     g_free(rom->data);
     g_free(rom->path);
     g_free(rom->name);
+    if (fw_dir) {
+        g_free(rom->fw_dir);
+        g_free(rom->fw_file);
+    }
     g_free(rom);
+
     return -1;
 }
 
@@ -987,23 +1007,102 @@ int rom_add_option(const char *file, int32_t bootindex)
     return rom_add_file(file, "genroms", 0, bootindex, true, NULL);
 }
 
+static void rom_default_loader(Rom *rom, Error **errp)
+{
+    Error *local_err = NULL;
+
+    if (rom->data == NULL) {
+        goto out;
+    }
+
+    if (rom->mr) {
+        void *host = memory_region_get_ram_ptr(rom->mr);
+        memcpy(host, rom->data, rom->datasize);
+    } else {
+        cpu_physical_memory_write_rom(&address_space_memory,
+                                      rom->addr, rom->data, rom->datasize);
+    }
+
+ out:
+    error_propagate(errp, local_err);
+    return;
+}
+
+static void rom_load_file_entry(Rom *rom, Error **errp)
+{
+    FILE *f;
+    char *dst;
+    size_t bytes, length = rom->datasize;
+    Error *local_err = NULL;
+
+    f = fopen(rom->path, "rb");
+    if (!f) {
+        error_setg(&local_err, "unable to open file: %s", rom->path);
+        goto out;
+    }
+
+    dst = cpu_physical_memory_map(rom->addr, &length, 1);
+    if (!dst) {
+        error_setg(&local_err,
+                   "unable to map file entry %s (paddr %" PRIx64
+                   ", length %"PRIx64", offset %"PRIx64"): %s",
+                   rom->name, rom->addr, rom->datasize, rom->offset,
+                   strerror(errno));
+        goto out_fclose;
+    }
+
+    fseek(f, rom->offset, 0);
+    bytes = fread(dst, 1, length, f);
+    cpu_physical_memory_unmap(dst, length, 1, length);
+
+    if (bytes != length) {
+        error_setg(&local_err,
+                   "unable to load file entry %s (paddr %" PRIx64
+                   ", length %"PRIx64", offset %"PRIx64"): %s",
+                   rom->name, rom->addr, length, rom->offset,
+                   strerror(errno));
+        goto out_fclose;
+    }
+
+ out_fclose:
+    fclose(f);
+ out:
+    error_propagate(errp, local_err);
+}
+
+int rom_add_file_entry(const char *name, const char *path,
+                       uint64_t paddr, size_t offset, size_t size)
+{
+    Rom *rom;
+
+    rom             = g_malloc0(sizeof(*rom));
+    rom->name       = g_strdup(name);
+    rom->path       = g_strdup(path);
+    rom->addr       = paddr;
+    rom->offset     = offset;
+    rom->datasize   = size;
+    rom->load_fn    = rom_load_file_entry;
+    rom_insert(rom);
+
+    return 0;
+}
+
 static void rom_reset(void *unused)
 {
     Rom *rom;
+    Error *local_err = NULL;
 
     QTAILQ_FOREACH(rom, &roms, next) {
         if (rom->fw_file) {
             continue;
         }
-        if (rom->data == NULL) {
-            continue;
-        }
-        if (rom->mr) {
-            void *host = memory_region_get_ram_ptr(rom->mr);
-            memcpy(host, rom->data, rom->datasize);
+        if (rom->load_fn) {
+            rom->load_fn(rom, &local_err);
         } else {
-            cpu_physical_memory_write_rom(&address_space_memory,
-                                          rom->addr, rom->data, rom->datasize);
+            rom_default_loader(rom, &local_err);
+        }
+        if (local_err) {
+            break;
         }
         if (rom->isrom) {
             /* rom needs to be written only once */
@@ -1018,6 +1117,8 @@ static void rom_reset(void *unused)
          */
         cpu_flush_icache_range(rom->addr, rom->datasize);
     }
+
+    error_propagate(&error_abort, local_err);
 }
 
 int rom_check_and_register_reset(void)

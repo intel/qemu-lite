@@ -75,6 +75,7 @@ void qemu_add_exit_notifier(Notifier *notify);
 void qemu_remove_exit_notifier(Notifier *notify);
 
 void qemu_add_machine_init_done_notifier(Notifier *notify);
+void qemu_remove_machine_init_done_notifier(Notifier *notify);
 
 void hmp_savevm(Monitor *mon, const QDict *qdict);
 int load_vmstate(const char *name);
@@ -119,7 +120,7 @@ void qemu_savevm_command_send(QEMUFile *f, enum qemu_vm_cmd command,
                               uint16_t len, uint8_t *data);
 void qemu_savevm_send_ping(QEMUFile *f, uint32_t value);
 void qemu_savevm_send_open_return_path(QEMUFile *f);
-int qemu_savevm_send_packaged(QEMUFile *f, const QEMUSizedBuffer *qsb);
+int qemu_savevm_send_packaged(QEMUFile *f, const uint8_t *buf, size_t len);
 void qemu_savevm_send_postcopy_advise(QEMUFile *f);
 void qemu_savevm_send_postcopy_listen(QEMUFile *f);
 void qemu_savevm_send_postcopy_run(QEMUFile *f);
@@ -131,21 +132,12 @@ void qemu_savevm_send_postcopy_ram_discard(QEMUFile *f, const char *name,
 
 int qemu_loadvm_state(QEMUFile *f);
 
-typedef enum DisplayType
-{
-    DT_DEFAULT,
-    DT_CURSES,
-    DT_SDL,
-    DT_GTK,
-    DT_NOGRAPHIC,
-    DT_NONE,
-} DisplayType;
-
 extern int autostart;
 
 typedef enum {
     VGA_NONE, VGA_STD, VGA_CIRRUS, VGA_VMWARE, VGA_XENFB, VGA_QXL,
     VGA_TCX, VGA_CG3, VGA_DEVICE, VGA_VIRTIO,
+    VGA_TYPE_MAX,
 } VGAInterfaceType;
 
 extern int vga_interface_type;
@@ -154,7 +146,6 @@ extern int vga_interface_type;
 extern int graphic_width;
 extern int graphic_height;
 extern int graphic_depth;
-extern DisplayType display_type;
 extern int display_opengl;
 extern const char *keyboard_layout;
 extern int win2k_install_hack;
@@ -243,7 +234,6 @@ void qemu_boot_set(const char *boot_order, Error **errp);
 QemuOpts *qemu_get_machine_opts(void);
 
 bool defaults_enabled(void);
-bool usb_enabled(void);
 
 extern QemuOptsList qemu_legacy_drive_opts;
 extern QemuOptsList qemu_common_drive_opts;

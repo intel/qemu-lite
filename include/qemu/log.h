@@ -42,6 +42,7 @@ static inline bool qemu_log_separate(void)
 #define CPU_LOG_TB_NOCHAIN (1 << 13)
 #define CPU_LOG_PAGE       (1 << 14)
 #define LOG_TRACE          (1 << 15)
+#define CPU_LOG_TB_OP_IND  (1 << 16)
 
 /* Returns true if a bit is set in the current loglevel mask
  */
@@ -54,7 +55,7 @@ static inline bool qemu_loglevel_mask(int mask)
 
 /* main logging function
  */
-void GCC_FMT_ATTR(1, 2) qemu_log(const char *fmt, ...);
+int GCC_FMT_ATTR(1, 2) qemu_log(const char *fmt, ...);
 
 /* vfprintf-like logging function
  */
@@ -104,23 +105,10 @@ typedef struct QEMULogItem {
 
 extern const QEMULogItem qemu_log_items[];
 
-/* This is the function that actually does the work of
- * changing the log level; it should only be accessed via
- * the qemu_set_log() wrapper.
- */
-void do_qemu_set_log(int log_flags, bool use_own_buffers);
-
-static inline void qemu_set_log(int log_flags)
-{
-#ifdef CONFIG_USER_ONLY
-    do_qemu_set_log(log_flags, true);
-#else
-    do_qemu_set_log(log_flags, false);
-#endif
-}
-
-void qemu_set_log_filename(const char *filename);
-void qemu_set_dfilter_ranges(const char *ranges);
+void qemu_set_log(int log_flags);
+void qemu_log_needs_buffers(void);
+void qemu_set_log_filename(const char *filename, Error **errp);
+void qemu_set_dfilter_ranges(const char *ranges, Error **errp);
 bool qemu_log_in_addr_range(uint64_t addr);
 int qemu_str_to_log_mask(const char *str);
 
